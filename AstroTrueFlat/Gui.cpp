@@ -117,8 +117,8 @@ HRESULT Present(IDXGISwapChain* pChain, UINT syncInterval, UINT flags) {
 		ImGui::Checkbox("Enable", pApplyNewNormal);
 
 		ImGui::Text("Insert - Show/Hide this menu");
-		ImGui::Text("G - Save the angle of the surface you are pointing at");
-		ImGui::Text("T - Enable/Disable freezing angle");
+		ImGui::Text("T - Save the angle of the surface you are pointing at");
+		ImGui::Text("G - Enable/Disable freezing angle");
 		
 		ImGui::End();
 	}
