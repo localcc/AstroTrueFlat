@@ -69,6 +69,107 @@ void SetupRenderTarget(IDXGISwapChain* pChain) {
 	hookedContext->OMSetRenderTargets(1, &renderTarget, nullptr);
 }
 
+#ifdef UWP
+#define _SILENCE_CLANG_COROUTINE_MESSAGE
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.h>
+#include <winrt/Windows.Web.Syndication.h>
+#include <winrt/Windows.UI.Core.h>
+#include <winrt/Windows.UI.Input.h>
+
+using namespace winrt::Windows::UI::Input;
+using namespace winrt::Windows::UI::Core;
+static HRESULT PointerMovedEvent(const CoreWindow coreWindow, const PointerEventArgs args) {
+	PointerPoint currentPoint{ args.CurrentPoint() };
+	winrt::Windows::Foundation::Point pos{ currentPoint.Position() };
+
+	LPARAM lParam = MAKELONG(pos.X, pos.Y);
+	WndProc(hookedWindow, WM_MOUSEMOVE, 0, lParam);
+	return S_OK;
+}
+
+bool leftState;
+bool rightState;
+bool middleState;
+static HRESULT PointerButtonEvent(CoreWindow coreWindow, const PointerEventArgs args) {
+	PointerPoint currentPoint{ args.CurrentPoint() };
+	PointerPointProperties props{ currentPoint.Properties() };
+
+	bool left = props.IsLeftButtonPressed();
+	bool right = props.IsRightButtonPressed();
+	bool middle = props.IsMiddleButtonPressed();
+
+	if (left != leftState) {
+		WndProc(hookedWindow, left ? WM_LBUTTONDOWN : WM_LBUTTONUP, 0, 0);
+		leftState = left;
+	}
+	if (right != rightState) {
+		WndProc(hookedWindow, right ? WM_RBUTTONDOWN : WM_RBUTTONUP, 0, 0);
+		rightState = right;
+	}
+	if (middle != middleState) {
+		WndProc(hookedWindow, middle ? WM_MBUTTONDOWN : WM_MBUTTONUP, 0, 0);
+		middleState = middle;
+	}
+	return S_OK;
+}
+
+static HRESULT PointerWheelChangedEvent(const CoreWindow coreWindow, const PointerEventArgs args) {
+	PointerPoint currentPoint{ args.CurrentPoint() };
+	PointerPointProperties props{ currentPoint.Properties() };
+
+	int mouse = props.MouseWheelDelta();
+	WPARAM wParam = MAKELONG(0, mouse);
+	WndProc(hookedWindow, WM_MOUSEWHEEL, wParam, 0);
+	return S_OK;
+}
+
+static HRESULT KeyboardEvent(const CoreWindow coreWindow, const KeyEventArgs args) {
+	CorePhysicalKeyStatus keyStatus{ args.KeyStatus() };
+
+	WPARAM vk = (WPARAM)args.VirtualKey();
+
+	int hiWord = MAKEWORD(keyStatus.ScanCode, keyStatus.IsExtendedKey ? KF_EXTENDED : 0);
+	LPARAM lParam = MAKELONG(keyStatus.RepeatCount, hiWord);
+
+	WndProc(hookedWindow, keyStatus.IsKeyReleased ? WM_KEYUP : WM_KEYDOWN, vk, lParam);
+	return S_OK;
+}
+
+bool bUwpHooksInitialized;
+
+BOOL CALLBACK FindUWPWindow(HWND hWnd, LPARAM lParam) {
+	wchar_t className[500];
+	if (GetClassNameW(hWnd, className, 500) == 0) return true;
+	if (wcscmp(className, L"Windows.UI.Core.CoreWindow") == 0) {
+		hookedWindow = hWnd;
+		return false;
+	}
+	return true;
+}
+
+LRESULT CALLBACK UwpWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	if (!bUwpHooksInitialized) {
+		CoreWindow window{ CoreWindow::GetForCurrentThread() };
+		window.PointerMoved(PointerMovedEvent);
+		window.PointerPressed(PointerButtonEvent);
+		window.PointerReleased(PointerButtonEvent);
+		window.PointerWheelChanged(PointerWheelChangedEvent);
+		
+		window.KeyDown(KeyboardEvent);
+		window.KeyUp(KeyboardEvent);
+		bUwpHooksInitialized = true;
+
+		// UwpWndProc should never be called again after initialization
+		SetWindowLongPtr(hookedWindow, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
+		WNDPROC cpy = originalWndProc;
+		originalWndProc = nullptr;
+		return CallWindowProc(cpy, hwnd, msg, wParam, lParam);
+	}
+	return S_OK;
+}
+#endif
 
 HRESULT Present(IDXGISwapChain* pChain, UINT syncInterval, UINT flags) {
 	if (!bInitialized) {
@@ -78,13 +179,22 @@ HRESULT Present(IDXGISwapChain* pChain, UINT syncInterval, UINT flags) {
 		if (SUCCEEDED(pChain->GetDevice(IID_PPV_ARGS(&hookedDevice)))) {
 			hookedDevice->GetImmediateContext(&hookedContext);
 
+#ifndef UWP
 			DXGI_SWAP_CHAIN_DESC desc;
 			pChain->GetDesc(&desc);
 			hookedWindow = desc.OutputWindow;
+			originalWndProc = (WNDPROC)SetWindowLongPtr(hookedWindow, GWLP_WNDPROC, (LONG_PTR)WndProc);
+#else
+			HWND parentWindow = FindWindowW(L"ApplicationFrameWindow", L"ASTRONEER");
+			EnumChildWindows(parentWindow, FindUWPWindow, 0);
+			if (hookedWindow == nullptr) {
+				std::cerr << "Failed to find window! Retrying..." << std::endl;
+				return pHookD3D11Present(pChain, syncInterval, flags);
+			}
+			originalWndProc = (WNDPROC)SetWindowLongPtr(hookedWindow, GWLP_WNDPROC, (LONG_PTR)UwpWndProc);
+#endif
 
 			SetupRenderTarget(pChain);
-
-			originalWndProc = (WNDPROC)SetWindowLongPtr(hookedWindow, GWLP_WNDPROC, (LONG_PTR)WndProc);
 
 			ImGui::CreateContext();
 			ImGuiIO& io = ImGui::GetIO();

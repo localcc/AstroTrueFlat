@@ -15,6 +15,7 @@ extern "C" {
 	float modifiedNormalZ;
 	bool applyNewNormal;
 	void patch_deformtool_move();
+	void patch_deformtool_move_uwp();
 }
 
 Hook deformToolInteractionHook;
@@ -37,10 +38,17 @@ void Init() {
 		return;
 	}
 
+#ifndef UWP
 	DWORD_PTR moveInject = baseAddress + 0xfaf0b8; // TODO: dynamic detection
 	deformToolMoveHook.pSource = (void*)moveInject;
 	deformToolMoveHook.pDest = (void*)patch_deformtool_move;
 	deformToolMoveHook.dwLen = 36;
+#else
+	DWORD_PTR moveInject = baseAddress + 0xc73900; // TODO: dynamic detection
+	deformToolMoveHook.pSource = (void*)moveInject;
+	deformToolMoveHook.pDest = (void*)patch_deformtool_move_uwp;
+ 	deformToolMoveHook.dwLen = 36;
+#endif
 
 	if (!AttachHook(&deformToolMoveHook)) {
 		std::cerr << "Failed to attach deform tool move hook!" << std::endl;
