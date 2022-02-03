@@ -5,7 +5,7 @@
 #include <backends/imgui_impl_dx11.h>
 #include <d3d11.h>
 #include <dxgi.h>
-#include <detours/detours.h>
+#include <MinHook.h>
 
 #include <iostream>
 
@@ -30,6 +30,10 @@ ID3D11DeviceContext* hookedContext;
 ID3D11RenderTargetView* renderTarget;
 WNDPROC originalWndProc;
 HWND hookedWindow;
+HWND inputWindow;
+
+SwapChainPresent originalD3D11Present = nullptr;
+SwapChainResizeBuffers originalD3D11ResizeBuffers = nullptr;
 
 SwapChainPresent pHookD3D11Present = nullptr;
 SwapChainResizeBuffers pHookD3D11ResizeBuffers = nullptr;
@@ -65,11 +69,12 @@ void SetupRenderTarget(IDXGISwapChain* pChain) {
 	hookedContext->OMSetRenderTargets(1, &renderTarget, nullptr);
 }
 
+
 HRESULT Present(IDXGISwapChain* pChain, UINT syncInterval, UINT flags) {
 	if (!bInitialized) {
 		std::cout << "Initializing DX11 hook" << std::endl;
 		hookedSwapChain = pChain;
-
+		
 		if (SUCCEEDED(pChain->GetDevice(IID_PPV_ARGS(&hookedDevice)))) {
 			hookedDevice->GetImmediateContext(&hookedContext);
 
@@ -183,14 +188,18 @@ bool Gui::InitGui() {
 	pSwapChainVtable = (DWORD_PTR*)pSwapChain;
 	pSwapChainVtable = (DWORD_PTR*)pSwapChainVtable[0];
 
-	pHookD3D11Present = (HRESULT(*)(IDXGISwapChain*, UINT, UINT))pSwapChainVtable[8];
-	pHookD3D11ResizeBuffers = (HRESULT(*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT))pSwapChainVtable[13];
+	originalD3D11Present = (HRESULT(*)(IDXGISwapChain*, UINT, UINT))pSwapChainVtable[8];
+	originalD3D11ResizeBuffers = (HRESULT(*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT))pSwapChainVtable[13];
 
-	DetourTransactionBegin();
-	DetourUpdateThread(GetCurrentThread());
-	DetourAttach(&(PVOID&)pHookD3D11Present, Present);
-	DetourAttach(&(PVOID&)pHookD3D11ResizeBuffers, ResizeBuffers);
-	DetourTransactionCommit();
+	std::cout << std::hex << "VTable: " << pSwapChainVtable << std::endl;
+	std::cout << std::hex << "Present: " << pHookD3D11Present << std::endl;
+	std::cout << std::hex << "ResizeBuffers: " << pHookD3D11ResizeBuffers << std::endl;
+
+	MH_CreateHook((void*)originalD3D11Present, &Present, (LPVOID*)&pHookD3D11Present);
+	MH_EnableHook((void*)originalD3D11Present);
+
+	MH_CreateHook((void*)originalD3D11ResizeBuffers, &ResizeBuffers, (LPVOID*)&pHookD3D11ResizeBuffers);
+	MH_EnableHook((void*)originalD3D11ResizeBuffers);
 
 	pDevice->Release();
 	pContext->Release();
@@ -199,13 +208,10 @@ bool Gui::InitGui() {
 }
 
 void Gui::DestroyGui() {
-	DetourTransactionBegin();
-	DetourUpdateThread(GetCurrentThread());
-	if (pHookD3D11Present) DetourDetach(&(PVOID&)pHookD3D11Present, Present);
-	if (pHookD3D11ResizeBuffers) DetourDetach(&(PVOID&)pHookD3D11ResizeBuffers, ResizeBuffers);
-	DetourTransactionCommit();
+	MH_RemoveHook((void*)originalD3D11Present);
+	MH_RemoveHook((void*)originalD3D11ResizeBuffers);
 
-	if (originalWndProc) SetWindowLongPtr(hookedWindow, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
+	if (originalWndProc) SetWindowLongPtr(inputWindow, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
 
 	ImGui_ImplDX11_Shutdown();
 	ImGui_ImplWin32_Shutdown();

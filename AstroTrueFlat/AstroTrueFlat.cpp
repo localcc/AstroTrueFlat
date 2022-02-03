@@ -6,6 +6,7 @@
 #include "hook/Hook.h"
 #include <windows.h>
 #include <iostream>
+#include <MinHook.h>
 
 extern "C" {
 	float originalNormalX;
@@ -27,6 +28,7 @@ void PrepareDebug() {
 	freopen_s(&fDummy, "CONOUT$", "w", stdout);
 	std::cout << "Debug initialized" << std::endl;
 }
+
 
 void Init() {
 	DWORD_PTR baseAddress = (DWORD_PTR)GetModuleHandleW(nullptr);
@@ -54,9 +56,14 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD dwReason, LPVOID reserved) {
 #ifdef _DEBUG
 		PrepareDebug();
 #endif
+		if (MH_Initialize() != MH_OK) {
+			std::cerr << "Failed to init MinHook" << std::endl;
+			return false;
+		}
 		CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE)Init, nullptr, 0, 0);
 	} else if (dwReason == DLL_PROCESS_DETACH) {
 		Gui::DestroyGui();
+		MH_Uninitialize();
 		DetachHook(&deformToolMoveHook);
 	}
 
